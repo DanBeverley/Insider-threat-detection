@@ -4,6 +4,7 @@ import pandas as pd
 import logging
 import nltk
 from nltk.corpus import stopwords
+from tqdm import tqdm
 from typing import Optional, List, Tuple, Dict
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
@@ -190,7 +191,7 @@ def normalize_data(df:pd.DataFrame, method:str = "z-score",
     
     return df_normalized, scalers
 
-def preprocess_log(log_df: pd.DataFrame) -> pd.DataFrame:
+def preprocess_logs(log_df: pd.DataFrame) -> pd.DataFrame:
     """
     Preprocess log data (logon/logoff events, device connect/disconnect, etc.)
     
@@ -245,5 +246,206 @@ def preprocess_log(log_df: pd.DataFrame) -> pd.DataFrame:
         df["device_connection"] = device_connect.astype(int)
     logger.info(f"Log preprocessing complete. Shape: {df.shape}")
     return df
+
+def preprocess_emails(email_df:pd.DataFrame, min_word_length:int = 3) -> pd.DataFrame:
+    """
+    Preprocess email data, extracting features from email content and metadata.
+    
+    Args:
+        email_df: DataFrame containing email data
+        min_word_length: Minimum word length to consider in text processing
+    
+    Returns:
+        Preprocessed email DataFrame
+    """
+    logger.info("Preprocessing email data...")
+    df = email_df.copy()
+    # Identify column names if found in email data
+    content_col = next((col for col in df.columns if "content" in col.lower() or "body" in col.lower()), None)
+    subject_col = next((col for col in df.columns if "subject" in col.lower()), None)
+    from_col = next((col for col in df.columns if "from" in col.lower() or "sender" in col.lower()), None)
+    to_col = next((col for col in df.columns if "to" in col.lower() or "recipient" in col.lower()), None)
+    cc_col = next((col for col in df.columns if "cc" in col.lower()), None)
+    bc_col = next((col for col in df.columns if "bcc" in col.lower()), None)
+    time_col = next((col for col in df.columns if "time" in col.lower() or "date" in col.lower()), None)
+    # Standardize columns
+    if content_col and content_col != "content":
+        df = df.rename(columns = {content_col:"content"})
+    if subject_col and subject_col != "subject":
+        df = df.rename(columns = {subject_col:"subject"})
+    if from_col and from_col != "from":
+        df = df.rename(columns = {from_col:"from"})
+    if to_col and to_col != "to":
+        df = df.rename(columns = {to_col:"to"})
+    if time_col and time_col != "timestamp":
+        df = df.rename(columns = {time_col:"timestamp"})
+    # Ensure timestamp is in datetime format
+    if "timestamp" in df.columns:
+        if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors = "coerce")
+    # Extract tme components
+    if 'timestamp' in df.columns:
+        df['hour'] = df['timestamp'].dt.hour
+        df['day_of_week'] = df['timestamp'].dt.dayofweek
+        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+        df['is_outside_hours'] = ((df['hour'] < 8) | (df['hour'] > 18)).astype(int)
+    # Process email content if available
+    if "content" in df.columns:
+        # Handle missing content
+        df["content"] = df['content'].fillna('')
+        # Calculate content length
+        df["content_length"] = df["content"].str.len()
+        # Process text (tokenize, remove stopwords)
+        stop_words = set(stopwords.words("english"))
+
+        def process_text(text):
+            if not isinstance(text, str) or not text:
+                return []
+            tokens = nltk.word_tokenize(text.lower())
+            tokens = [word for word in tokens if word not in stop_words 
+                      and len(word)>=min_word_length
+                      and word.isalpha()]
+            return tokens
+        # Apply text processing to content
+        tqdm.pandas(desc = "Processing email content")
+        df["processed_content"] = df["content"].progress_apply(process_text)
+        df["word_count"] = df["processed_content"].apply(len)
+    # Process subject if available
+    if "subject" in df.columns:
+        # handle missing subjects
+        df["subject"] = df["subject"].fillna("")
+        # calculate subject length
+        df["subject_length"] = df["subject"].str.len()
+        # Process subject text
+        df["processed_subject"] = df["subject"].apply(process_text)
+    # Process recipient information
+    for col in ["to", "cc", "bcc"]:
+        if col in df.columns:
+            df[f"{col}_count"] = df[col].str.count("@").fillna(0).astype(int) + df[col].str.count(";").fillna(0).astype(int) + 1
+            # Check for external dummies
+            if df[col].dtype == object:  # Only for string columns
+                df[f'{col}_external'] = df[col].str.contains(
+                    r'@(?!company\.com|internal\.org)', 
+                    regex=True, 
+                    na=False).astype(int)
+    
+    # Flag sensitive keywords in subject or content
+    sensitive_keywords = [
+        'confidential', 'secret', 'private', 'proprietary', 'classified',
+        'sensitive', 'restricted', 'internal', 'password', 'credential']
+    for field in ["content", "subject"]:
+        if field in df.columns:
+            pattern = "|".join(sensitive_keywords)
+            df[f"{field}_sensitive"] = df[field].str.contains(pattern, case = False,
+                                                              regex = True, na = False).astype(int)
+    logger.info(f"Email preprocessing complete. Shape: {df.shape}")
+    return df
+
+def preprocess_file_access(file_df:pd.DataFrame) -> pd.DataFrame:
+    """
+    Preprocess file access data.
+    
+    Args:
+        file_df: DataFrame containing file access data
+    
+    Returns:
+        Preprocessed file access DataFrame
+    """
+    logger.info("Preprocessing file access data...")
+    df = file_df.copy()
+    # Identify common column names in file access data
+    user_col = next((col for col in df.columns if "user" in col.lower()), None)
+    file_col = next((col for col in df.columns if "file" in col.lower() or "document" in col.lower()), None)
+    action_col = next((col for col in df.columns if "action" in col.lower() or "activity" in col.lower()), None)
+    time_col = next((col for col in df.columns if "time" in col.lower() or "date" in col.lower()), None)
+    # Standardize column names if found
+    if user_col and user_col != 'user_id':
+        df = df.rename(columns={user_col: 'user_id'})
+    if file_col and file_col != 'file_name':
+        df = df.rename(columns={file_col: 'file_name'})
+    if action_col and action_col != 'action':
+        df = df.rename(columns={action_col: 'action'})
+    if time_col and time_col != 'timestamp':
+        df = df.rename(columns={time_col: 'timestamp'})
+    
+    # Ensure timestamp is in datetime format
+    if 'timestamp' in df.columns:
+        if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    
+    # Extract time components
+    if 'timestamp' in df.columns:
+        df['hour'] = df['timestamp'].dt.hour
+        df['day_of_week'] = df['timestamp'].dt.dayofweek
+        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+        df['is_outside_hours'] = ((df['hour'] < 8) | (df['hour'] > 18)).astype(int)
+    
+    # Flag sensitive file operations
+    if 'action' in df.columns:
+        sensitive_actions = ['delete', 'copy', 'download', 'upload', 'export']
+        df['is_sensitive_action'] = df['action'].str.lower().isin(sensitive_actions).astype(int)
+    
+    # Identify sensitive file types and locations (if file path available)
+    if "file_name" in df.columns:
+        sensitive_extensions = ['.pdf', '.docx', '.xlsx', '.pptx', '.db', '.sql', '.zip', '.tar', '.gz']
+        df["file_extension"] = df["file_name"].str.extract(r"(\.[^.]+)$", expand = False)
+        df["is_sensitive_file_type"] = df["file_extension"].isin(sensitive_extensions).astype(int)
+
+        sensitive_dirs = ['confidential', 'hr', 'finance', 'executive', 'secret', 'private']
+        pattern = '|'.join(sensitive_dirs)
+        df['is_sensitive_directory'] = df['file_name'].str.contains(
+            pattern, 
+            case=False, 
+            regex=True, 
+            na=False
+        ).astype(int)
+    logger.info(f"File access preprocessing complete. Shape: {df.shape}")
+    return df
+
+def main(input_dir:str = "../data/raw", output_dir:str = "../data/processed"):   
+    """
+    Main function to preprocess all data files in the input directory
+    and save them to the output directory.
+    
+    Args:
+        input_dir: Directory containing raw data files
+        output_dir: Directory to save processed data files
+    """
+    # If output file doesn't exist , create one
+    os.makedirs(output_dir, exist_ok=True)
+    # Get all files in input directory
+    input_files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
+
+    for file in input_files:
+        input_path = os.path.join(input_dir, file)
+        file_base, file_ext = os.path.splitext(file)
+        output_path = os.path.join(output_dir, f"{file_base}_processed{file_ext}")
+        try:
+            df = load_data(input_path)
+            df = clean_data(df)
+            df, _ = normalize_data(df)
+            # Apply specific preprocessing based on data type
+            if df["data_type"].iloc[0] == "logs":
+                df = preprocess_logs[df]
+            elif df["data_type"].iloc[0] == "email":
+                df = preprocess_emails[df]
+            elif df["data_type"].iloc[0] == "file":
+                df = preprocess_file_access(df)
+
+            # Save processed data
+            if file_ext == '.csv':
+                df.to_csv(output_path, index=False)
+            elif file_ext in ['.xlsx', '.xls']:
+                df.to_excel(output_path, index=False)
+            elif file_ext == '.json':
+                df.to_json(output_path, orient='records')
+            else:
+                df.to_csv(output_path, index=False)  # Default to CSV
+            
+            logger.info(f"Successfully processed {file} and saved to {output_path}")
+            
+        except Exception as e:
+            logger.error(f"Error processing {file}: {str(e)}")  
+
 
     
