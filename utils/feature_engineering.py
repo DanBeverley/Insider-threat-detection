@@ -375,3 +375,95 @@ def create_user_profiles(log_features:Optional[pd.DataFrame] = None,
     merged_df[numeric_cols] = merged_df[numeric_cols].fillna(0)
     logger.info(f"Created user profiles with {len(merged_df)} records across {merged_df["user_id"].nunique()} users")
     return merged_df
+
+def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> pd.DataFrame:
+    """
+    Extract network-based features from email communication patterns.
+    
+    Args:
+        email_df: DataFrame containing preprocessed email data
+        time_window: Time window for network analysis
+    
+    Returns:
+        DataFrame with network features per user
+    """
+    logger.info("Extracting network features from email communications...")
+    required_cols = ["from", "to", "timestamp"]
+    missing_cols = [col for col in required_cols if col not in email_df.columns]
+    if missing_cols:
+        logger.warning(f"Missing required columns: {missing_cols}. Cannot extract network features")
+        return pd.DataFrame()
+    df = email_df.copy()
+    # Ensure timestamp is datetime
+    if "timestamp" in email_df.columns and not pd.api.types.is_datatime64_any_dtype(df["timestamp"]):
+       df["timestamp"] = pd.to_datetime(df["timestamp"], errors = "coerce")
+    # Timestamp as index for resampling
+    df = df.set_index("timestamp")
+
+    features = []
+
+    for time_window_start in tqdm(pd.date_range(start = df_index.min(), end =df.index.max(), freq = time_window),
+                                  desc = "Processing time wiwndows for network analysis"):
+        time_window_end = time_window_start - pd.Timedelta(time_window)
+        window_data = df.loc[time_window_start:time_window_end].reset_index()
+        if len(window_data) == 0:
+            continue
+        # Directed graph for email communications
+        G = nx.DiGraph()
+        # Add edges for email communications
+        for _, row in window_data.iterrows():
+            sender = row["from"]
+            # Process multiple recipients (comma or semicolon separated)
+            if pd.notna(row["to"]):
+                recipients = re.split('[,:]', row["to"])
+                for recipient in recipients:
+                    recipient = recipient.strip()
+                    if recipient:
+                        G.add_edge(sender, recipient)
+        if G.number_of_nodes() == 0:
+            continue
+        # Network metrics for eaach user
+        for user in G.nodes():
+            try:
+                degree = G.degree(user)
+                in_degree = G.in_degree(user)
+                out_degree = G.out_degree(user)
+                try:
+                    betweenness = nx.betweeness_centrality(G)[user]
+                except:
+                    betweenness = 0
+
+                try:
+                    closeness = nx.closeness.centrality(G, user)
+                except:
+                    closeness = 0
+
+                try:
+                    pagerank = nx.pagerank(G)[user]
+                except:
+                    pagerank = 0
+
+                # Feature dictionary
+                feature_dict = {
+                    'user_id': user,
+                    'time_window_start': time_window_start,
+                    'time_window_end': time_window_end,
+                    'network_degree': degree,
+                    'network_in_degree': in_degree,
+                    'network_out_degree': out_degree,
+                    'network_betweenness': betweenness,
+                    'network_closeness': closeness,
+                    'network_pagerank': pagerank,
+                    'network_clustering': nx.clustering(G.to_undirected(), user) if G.to_undirected().degree(user) > 1 else 0
+                }
+                features.append(feature_dict)
+            except Exception as e:
+                logger.warning(f"Error calculating network metrics for user {user}: {str(e)}")
+                continue
+    feature_df = pd.DataFrame(features)
+    if not feature_df.empty:
+        logger.info(f"Extracted {len(feature_df)} network feature records across {feature_df['user_id'].nunique()} users")
+    else:
+        logger.warning("No network features extracted.")
+    
+    return feature_df
