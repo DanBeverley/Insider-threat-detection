@@ -467,3 +467,120 @@ def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> p
         logger.warning("No network features extracted.")
     
     return feature_df
+
+def analyze_temporal_patterns(df:pd.DataFrame, time_col:str="timestamp", user_col:str="user_id", activity_col:str=None,
+                              window_size:int = 7) -> pd.DataFrame:
+    """
+    Analyze temporal patterns in user behavior.
+    
+    Args:
+        df: DataFrame containing timestamped data
+        time_col: Column containing timestamps
+        user_col: Column containing user IDs
+        activity_col: Optional column containing activity type
+        window_size: Size of the rolling window (in days) for pattern detection
+    
+    Returns:
+        DataFrame with temporal pattern features
+    """
+    logger.info("Analyzing temporal patterns in user behavior...")
+    if time_col not in df.columns or user_col not in df.columns:
+        logger.error(f"Required columns missing. Need {time_col} and {user_col}")
+        return pd.Dataframe()
+    
+    data = df.copy()
+
+    if "timestamp" not in data.columns and not pd.api.types.is_datetime64_any_dtype(data[time_col]):
+        data[time_col] = pd.to_datetime(data[time_col], errors = "coerce")
+    
+    features = []
+
+    for user, user_data in tqdm(data.groupby(user_col), desc = "Analyzing user temporal patterns"):
+        user_data = user_data.sort_values(time_col)
+
+        # Hour of day distribution
+        hours = user_data[time_col].dt.hour
+        hour_counts = hours.value_counts().to_dict()
+
+        # Entropy of hour distribution (randomness of activity times)
+        total_count = sum(hour_counts.values())
+        hour_probs = [count / total_count for count in hour_counts.values()]
+        hour_entropy = -sum(p * np.log2(p) for p in hour_probs)
+        
+        # Day of week distribution
+        days = user_data[time_col].dt.dayofweek
+        day_counts = days.value_counts().to_dict()
+        
+        # working hours vs. non-working hours ratio
+        working_hours = hours.between(9, 17).sum()
+        non_working_hours = len(hours) - working_hours
+        working_ratio = working_hours / len(hours) if len(hours) > 0 else 0
+        
+        # weekday vs. weekend ratio
+        weekday = days.isin([0, 1, 2, 3, 4]).sum()  # Mon-Fri
+        weekend = len(days) - weekday
+        weekday_ratio = weekday / len(days) if len(days) > 0 else 0
+        
+        # regularity features
+        if len(user_data) > window_size:
+            # Calculate time between consecutive actions
+            time_diffs = user_data[time_col].diff().dropna()
+            
+            # Convert to seconds
+            time_diffs_sec = time_diffs.dt.total_seconds()
+            
+            # Calculate statistics of time differences
+            mean_diff = time_diffs_sec.mean()
+            std_diff = time_diffs_sec.std()
+            
+            # Coefficient of variation (higher means more irregular)
+            cv = std_diff / mean_diff if mean_diff > 0 else 0
+            
+            # Calculate running variance of time differences using rolling window
+            rolling_std = time_diffs_sec.rolling(window=window_size).std()
+            rolling_mean = time_diffs_sec.rolling(window=window_size).mean()
+            rolling_cv = rolling_std / rolling_mean
+            
+            # Detect changes in patterns
+            pattern_changes = (rolling_cv > (cv * 2)).sum()
+            
+            # Activity burst features
+            activity_counts = user_data.resample('D', on=time_col).size()
+            burst_threshold = activity_counts.mean() + 2 * activity_counts.std()
+            activity_bursts = (activity_counts > burst_threshold).sum()
+            
+            feature_dict = {
+                'user_id': user,
+                'total_activities': len(user_data),
+                'distinct_days': user_data[time_col].dt.date.nunique(),
+                'hour_entropy': hour_entropy,
+                'working_hours_ratio': working_ratio,
+                'weekday_ratio': weekday_ratio,
+                'avg_time_between_actions': mean_diff,
+                'std_time_between_actions': std_diff,
+                'coefficient_of_variation': cv,
+                'pattern_changes': pattern_changes,
+                'activity_bursts': activity_bursts
+            }
+            
+            # Add common hours (top 3)
+            top_hours = sorted(hour_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            for i, (hour, _) in enumerate(top_hours):
+                feature_dict[f'common_hour_{i+1}'] = hour
+            
+            # Add common days (top 3)
+            top_days = sorted(day_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            for i, (day, _) in enumerate(top_days):
+                feature_dict[f'common_day_{i+1}'] = day
+            
+            features.append(feature_dict)
+    
+    # Create features DataFrame
+    feature_df = pd.DataFrame(features)
+    
+    if not feature_df.empty:
+        logger.info(f"Extracted temporal pattern features for {len(feature_df)} users")
+    else:
+        logger.warning("No temporal pattern features extracted.")
+    
+    return feature_df
