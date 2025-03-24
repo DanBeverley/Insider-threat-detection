@@ -1,7 +1,9 @@
+from tqdm import tqdm
 import logging
 import pandas as pd
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
+from typing import Optional
 
 
 logging.basicConfig(level = logging.INFO,
@@ -111,3 +113,265 @@ def extract_log_features(log_df:pd.DataFrame, time_window:str = "1D") -> pd.Data
     logger.info(f"Extracted {len(feature_df)} log feature records across {feature_df["user_id"].nunique()} users")
     return feature_df
 
+def extract_email_features(email_df:pd.DataFrame, time_window:str="10", min_word_freq:int = 2,
+                           max_feature:int = 100) -> pd.DataFrame:
+    """
+    Extract features from email data using NLP techniques.
+    
+    Args:
+        email_df: DataFrame containing preprocessed email data
+        time_window: Time window for aggregation ('1D' for daily, '1H' for hourly, etc.)
+        min_word_freq: Minimum frequency for words to be included in features
+        max_features: Maximum number of text features to extract
+    
+    Returns:
+        DataFrame with extracted features
+    """
+    logger.info("Extracting features from email data...")
+    required_cols = ["from", "timestamp", "content"]
+    missing_cols = [col for col in required_cols if col not in email_df.columns]
+    if missing_cols:
+        logger.warning(f"Missing required columns {missing_cols}. Some features may not be extracted")
+    
+    df = email_df.copy()
+
+    if "timestamp" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors = "coerce")
+    
+    sender_col = "from" if "from" in df.columns else "user_id" if "user_id" in df.columns else None
+    if not sender_col:
+        logger.error("No sender column found ('from' or 'user_id'). Cannot extract user-based email features")
+        return pd.DataFrame()
+    sia = SentimentIntensityAnalyzer() if "content" in df.columns else None
+
+    features = []
+    # Timestamp as index for resampling
+    if "timestamp" in df.columns:
+        df = df.set_index("timestamp")
+        # Group by sender and resample by time window
+        for sender, sender_data in tqdm(df.groupby(sender_col), desc = "Processing email senders"):
+            time_groups = sender_data.groupby(pd.Grouper(freq = time_window))
+            # Process each time window
+            for time_window_start, window_data in time_groups:
+                if len(window_data) == 0:
+                    continue
+                window_data = window_data.reset_index()
+                # Base features
+                feature_dict = {"user_id":sender, 
+                                "time_window_start":time_window_start,
+                                "time_window_end":time_window_start + pd.Timedelta(time_window),
+                                "email_count":len(window_data)}
+                # Extract time-based features
+                if "is_outside_hours" in window_data.columns:
+                    feature_dict["email_outside_hours_ratio"] = window_data["is_outside_hours"].mean()
+                if "is_weekend" in window_data.columns:
+                    feature_dict["email_weekend_ratio"] = window_data["is_weekend"].mean()
+                if "content" in window_data.columns:
+                    all_content = ' '.join(window_data['content'].fillna(''))
+                    # Sentiment analysis
+                    if sia and all_content:
+                        sentiment = sia.polarity_scores(all_content)
+                        feature_dict["email_sentiment_neg"] = sentiment["neg"]
+                        feature_dict["email_sentiment_neu"] = sentiment["neu"]
+                        feature_dict["email_sentiment_pos"] = sentiment["pos"]
+                        feature_dict["email_sentiment_compound"] = sentiment["compound"]
+                    # Content length statistics
+                    if "content_length" in window_data.columns:
+                        feature_dict["avg_email_length"] = window_data["content_length"].mean()
+                        feature_dict["max_email_length"] = window_data["content_length"].max()
+                        feature_dict["total_email_length"] = window_data["content_length"].sum()
+                    if "word_count" in window_data.columns:
+                        feature_dict["avg_word_count"] = window_data["word_count"].mean()
+                        feature_dict["max_word_count"] = window_data["word_count"].max()
+                        feature_dict["total_word_count"] = window_data["word_count"].sum()
+                # Subject features
+                if "subject" in window_data.columns:
+                    if "subject_sensitive" in window_data.columns:
+                        feature_dict["sensitive_subject_ratio"] = window_data["subject_sensitive"].mean()
+                    if "subject_length" in window_data.columns:
+                        feature_dict["avg_subject_length"] = window_data["subject_length"].mean()
+                # Recipient features
+                for col in ["to", "cc", "bcc"]:
+                    count_col = f"{col}_count"
+                    if count_col in window_data.columns:
+                        feature_dict[f"avg_{col}_recipients"] = window_data[count_col].mean()
+                        feature_dict[f"max_{col}_recipients"] = window_data[count_col].max()
+                        feature_dict[f"total_{col}_recipients"] = window_data[count_col].sum()
+                    # External communications
+                    external_col = f"{col}_external"
+                    if external_col in window_data.columns:
+                        feature_dict[f"{col}_external_ratio"] = window_data[external_col].mean()
+                # Attachment features if available
+                if "has_attachment" in window_data.columns:
+                    feature_dict["attachment_ratio"] = window_data["has_attachment"].mean()
+                # Sensitive content features
+                if "content_sensitive" in window_data.columns:
+                    feature_dict["sensitive_content_ratio"] = window_data["content_sensitive"].mean()
+                features.append(feature_dict)
+    feature_df = pd.DataFrame(features)
+    # Extract text features from email content if available
+    if "processed_content" in email_df.columns and len(feature_df) > 0:
+        # Combine all processed words for each user and time window
+        user_time_content = {}
+        for _, row in email_df.iterrows():
+            if pd.isna(row.get("timestamp")) or not row.get("processed_content"):
+                continue
+            user_id = row.get(sender_col)
+            timestamp = pd.to_datetime(row.get("timestamp"))
+            content = row.get("processed_content")
+            # Time window start
+            time_window_start = timestamp.floor(time_window)
+            key = (user_id, time_window_start)
+            # Add words to dictionary
+            if key not in user_time_content:
+                user_time_content[key] = []
+            user_time_content[key].extend(content)
+        # Create document-term matrix
+        if user_time_content:
+            keys = []
+            docs = []
+            for key, words in user_time_content.items():
+                keys.append(key)
+                docs.append(" ".join(words))
+            # TF-IDF to extract features
+            vectorizer = TfidfVectorizer(max_features=max_features, min_df = min_word_freq)
+            tfidf_matrix = vectorizer.fit_transform(docs)
+            feature_names = vectorizer.get_feature_names_out()
+            
+            tfidf_df = pd.DataFrame(tfidf_matrix.toarray(), columns=[f"word_{word}" for word in feature_names])
+            # Add user and time window
+            tfidf_df["user_id"] = [key[0] for key in keys]
+            tfidf_df["time_window_start"] = [key[1] for key in keys]
+            # Merge with other features
+            feature_df = pd.merge(feature_df, tfidf_df, on=["user_id", "time_window_start"], how="left")
+    logger.info(f"Extracted {len(feature_df)} email feature records across {feature_df["user_id"].nunique()} users")
+    return feature_df
+
+def extract_file_access_features(file_df:pd.DataFrame, time_window:str="1D") -> pd.DataFrame:
+    """
+    Extract features from file access data.
+    
+    Args:
+        file_df: DataFrame containing preprocessed file access data
+        time_window: Time window for aggregation ('1D' for daily, '1H' for hourly, etc.)
+    
+    Returns:
+        DataFrame with extracted features
+    """
+    logger.info("Extracting features from file access data...")
+    required_cols = ["user_id", "timestamp", "file_name", "action"]
+    missing_cols = [col for col in required_cols if col not in file_df.columns]
+    if missing_cols:
+        logger.warning(f"Missing required columns: {missing_cols}. Some features may not be extracted")
+    df = file_df.copy()
+    
+    if "timestamp" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    features = []
+    # Timestamp as index for resampling
+    if "timestamp" in df.columns and "user_id" in df.columns:
+        df = df.set_index("timestamp")
+        for user_id, user_data in tqdm(df.groupby("user_id"), desc="Processing file access users"):
+            # Resample by time window
+            time_groups = user_data.groupby(pd.Grouper(freq=time_window))
+            # Process each time window
+            for time_window_start, window_data in time_groups:
+                if len(window_data) == 0:
+                    continue
+
+                window_data = window_data.reset_index()
+
+                feature_dict = {"user_id":user_id,
+                                "time_window_start":time_window_start,
+                                "time_window_end":time_window_start + pd.Timedelta(time_window),
+                                "file_access_count":len(window_data)}
+                # Extract time-based features
+                if "is_outside_hours" in window_data.columns:
+                    feature_dict["file_outside_hours_ratio"] = window_data["is_outside_hours"].mean()
+                if "is_weekend" in window_data.columns:
+                    feature_dict["file_weekend_ratio"] = window_data["is_weekend"].mean()
+                # Action-based features
+                if "action" in window_data.columns:
+                    action_counts = window_data["action"].str.lower().value_counts()
+                    for action in ["read", "write", "delete", "copy", "download", "upload", "execute"]:
+                        count = action_counts.get(action, 0)
+                        feature_dict[f"{action}_count"] = count
+                        feature_dict[f"{action}_ratio"] = count/len(window_data) if len(window_data) > 0 else 0
+                    if "is_sensitive_action" in window_data.columns:
+                        feature_dict["sensitive_action_ratio"] = window_data["is_sensitive_action"].mean()
+                # File type features
+                if "file_extension" in window_data.columns:
+                    extension_counts = window_data["file_extension"].fillna('').value_counts()
+                    feature_dict["unique_file_extensions"] = len(extension_counts)
+                    common_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.zip', '.exe']
+                    for ext in common_extensions:
+                        count = extension_counts.get(ext, 0)
+                        feature_dict[f"{ext.replace(".", "")}_count"] = count
+                    # Sensitive file types
+                    if "is_sensitive_file_types" in window_data.columns:
+                        feature_dict["sensitive_file_type_ratio"] = window_data["is_sensitive_file_type"].mean()
+                # Directory features
+                if "is_sensitive_directory" in window_data.columns:
+                    feature_dict["sensitive_directory_ratio"] = window_data["is_sensitive_directory"].mean()
+                # File volume features
+                if "file_name" in window_data.columns:
+                    feature_dict["unique_files"] = window_data["file_name"].nunique()
+                features.append(feature_dict)
+    feature_df = pd.DataFrame(features)
+    logger.info(f"Extract {len(feature_df)} file access feature records across {feature_df["user_id"].nunique()} users")
+    return feature_df
+
+def create_user_profiles(log_features:Optional[pd.DataFrame] = None,
+                         email_features:Optional[pd.DataFrame] = None,
+                         file_features:Optional[pd.DataFrame] = None,
+                         time_window:str = "1D") -> pd.DataFrame:
+    """
+    Aggregate features from different data sources to create comprehensive user profiles.
+    
+    Args:
+        log_features: DataFrame with log-based features
+        email_features: DataFrame with email-based features
+        file_features: DataFrame with file access-based features
+        time_window: Time window for aggregation ('1D' for daily, '1H' for hourly, etc.)
+    
+    Returns:
+        DataFrame with user profiles
+    """
+    logger.info("Creating user profiles by aggregating features...")
+    dfs = []
+    # Add available feature sets
+    if log_features is not None and not log_features.empty:
+        dfs.append(("log", log_features))
+    if email_features is not None and not email_features.empty:
+        dfs.append(("email", email_features))
+    if file_features is not None and not file_features.empty:
+        dfs.append(("file", file_features))
+    if not dfs:
+        logger.warning("No feature sets provided. Cannot create user profile")
+        return pd.DataFrame()
+    
+    # Merged Dataframe with all features
+    merged_df = None
+    for source, df in dfs:
+        # Ensure the DataFrame has the required columns
+        if "user_id" not in df.columns or "time_window_start" not in df.columns:
+            logger.warning(f"DataFrame from {source} missing required columns. Skipping...")
+            continue
+        # Rename columns to avoid conflicts (except user_id and time window columns)
+        rename_cols = {col:f"{source}_{col}" for col in df.columns if col not in ["user_id",
+                                                                                  "time_window_start",
+                                                                                  "time_window_end"]}
+        df = df.rename(columns = rename_cols)
+        if merged_df is None:
+            merged_df = df.opy()
+        else:
+            merged_df = pd.merge(merged_df, df, on=["user_id", "time_window_start"], how="outer")
+    if merged_df is None:
+        logger.error("Failed to create merged feature set. Cannot create user profiles")
+        return pd.DataFrame()
+    # Convert NaN to 0 
+    numeric_cols = merged_df.select_dtypes(include = ["int64", "float64"]).columns
+    merged_df[numeric_cols] = merged_df[numeric_cols].fillna(0)
+    logger.info(f"Created user profiles with {len(merged_df)} records across {merged_df["user_id"].nunique()} users")
+    return merged_df
