@@ -495,6 +495,205 @@ class ModelTrainer:
         feature_importance.to_csv(importance_path, index = False)
         logger.info(f"10 features by coefficient magnitude: \n{feature_importance.head(10)}")
         return lr
+    
+    def train_ensemble(self) -> Dict[str, Any]:
+        """
+        Create an ensemble of models using voting or stacking.
+        
+        Returns:
+            Dictionary containing the ensemble model and related information
+        """
+        logger.info("Training ensemble model")
+        # Ensure individial models are trained
+        if len(self.trained_models) < 2:
+            logger.warning("Need at least 2 trained models for ensemble. Training default model...")
+            self.train_random_forest()
+            self.train_xgboost()
+        from sklearn.ensemble import VotingClassifier
+        # Create a list of (name, model) tuples
+        models = []
+        for name, model in self.trained_models.items():
+            # Skip LSTM for not being compatible with VotingClassifier
+            if name != "lstm":
+                models.append((name, model))
+        # Create and train ensemble
+        ensemble = VotingClassifier(estimators = models,
+                                    voting = "soft",
+                                    n_jobs = -1)
+        start_time = time.time()
+        ensemble.fit(self.X_train, self.y_train)
+        training_time = time.time() - start_time
+        logger.info(f"Ensemble training completed in {training_time:.2f} seconds")
+
+        model_path = os.path.join(self.output_dir, "ensemble_model.pkl")
+        with open(model_path, "wb") as f:
+            pickle.dump(ensemble, f)
+        logger.info(f"Saved ensemble model to {model_path}")
+        # Evaluate model
+        y_pred = ensemble.predict(self.X_test)
+        y_prob = ensemble.predict_proba(self.X_test)[:,1]
+
+        metrics = self._calculate_metrics(self.y_test, y_pred, y_prob)
+        self.model_metrics["ensemble"] = metrics
+        self.trained_models["ensemble"] = ensemble
+        return {"model":ensemble,
+                "components": models}
+    
+    def compare_models(self) -> pd.DataFrame:
+        """
+        Compare all trained models based on their performance metrics.
+        
+        Returns:
+            DataFrame containing performance metrics for all models
+        """
+        logger.info("Comparing model performace")
+        if not self.model_metrics:
+            logger.warning("No models evaluated yet. Train some model first")
+            return pd.DataFrame()
+        metrics_df = pd.DataFrame(self.model_metrics).T.reset_index()
+        metrics_df = metrics_df.rename(columns={"index":"model"})
+        
+        comparison_path = os.path.join(self.output_dir, "model_comparison.csv")
+        metrics_df.to_csv(comparison_path, index = False)
+
+        logger.info(f"Saved model comparison to {comparison_path}")
+        logger.info(f"Model comparison: \n{metrics_df}")
+
+        best_model = metrics_df.loc[metrics_df["f1_score"].idxmax()]["model"]
+        logger.info(f"Best model based on F1-score: {best_model}")
+
+        return metrics_df
+    
+    def _calculate_metrics(self, y_true:np.ndarray, y_pred:np.ndarray, y_prob:np.ndarray) -> Dict[str, float]:
+        """
+        Calculate performance metrics for model evaluation.
+        
+        Args:
+            y_true: True labels
+            y_pred: Predicted labels
+            y_prob: Predicted probabilities
+        
+        Returns:
+            Dictionary of performance metrics
+        """
+        # Classification metrics
+        accuracy = accuracy_score(y_true, y_pred)
+        precision = precision_score(y_true, y_pred)
+        recall = recall_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)
+
+        try:
+            auc_roc = roc_auc_score(y_true, y_prob)
+        except:
+            auc_roc = None
+        try:
+            auc_pr = average_precision_score(y_true, y_prob)
+        except:
+            auc_pr = None
+        # Confusion matrix
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        specificity = tn/(tn + fp) if (tn + fp) > 0 else 0
+        metrics = {
+            "accuracy":accuracy,
+            "precision":precision,
+            "recall":recall,
+            "f1_score":f1,
+            "auc_roc":auc_roc,
+            "auc_pr":auc_pr,
+            "specificity":specificity,
+            "tp":tp,
+            "fp":fp,
+            "tn":tn,
+            "fn":fn
+        }
+        logger.info(f"Model evaluation metrics: {metrics}")
+        return metrics
+    
+    def _create_sequences(self, X:pd.DataFrame, y:pd.Series, sequence_length:int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Create sequences for LSTM model training.
+        
+        Args:
+            X: Feature data
+            y: Target data
+            sequence_length: Number of time steps in each sequence
+        
+        Returns:
+            Tuple of (X_sequences, y_sequences)
+        """
+        X_values = X.values
+        y_values = y.values
+        X_sequences = []
+        y_sequences = []
+        for i in range(len(X_values) - sequence_length):
+            X_sequences.append(X_values[i:i+sequence_length])
+            y_sequences.append(y_values[i+sequence_length])
+        return np.ndarray(X_sequences), np.array(y_sequences)
+    
+    def main():
+        """Parse command line arguments and run model training"""
+        import argparse
+        parser = argparse.ArgumentParser(description="Train insider threat detection models")
+        parser.add_argument('--data', type=str, default=str(INTERIM_DATA_DIR / "engineered_features.csv"),
+                        help='Path to the feature-engineered data')
+        parser.add_argument('--target', type=str, default="insider_threat",
+                        help='Name of the target column')
+        parser.add_argument('--output', type=str, default=str(MODELS_DIR),
+                        help='Directory to save trained models')
+        parser.add_argument('--models', type=str, nargs='+', 
+                        default=['random_forest', 'xgboost', 'logistic_regression', 'ensemble'],
+                        help='Models to train (random_forest, xgboost, lstm, logistic_regression, ensemble)')
+        parser.add_argument('--no-scaling', action='store_true', 
+                        help='Disable feature scaling')
+        parser.add_argument('--imbalance', type=str, default='smote',
+                        choices=['smote', 'undersampling', 'class_weight', 'none'],
+                        help='Method to handle class imbalance')
+        args = parser.parse_args()
+        # Handle 'none' option for imbalance
+        handle_imbalance = None if args.imbalance.lower() == "none" else args.imbalance
+
+        try:
+            trainer = ModelTrainer(feature_data_path=args.data,
+                                   target_column=args.target,
+                                   output_dir=args.output,
+                                   scale_features=not args.no_scaling,
+                                   handle_imbalance=handle_imbalance)
+            # Load and preprocess data
+            trainer.load_data()
+            trainer.preprocess_data()
+
+            for model_name in args.models:
+                try:
+                    if model_name.lower() == "random_forest":
+                        trainer.train_random_forest()
+                    elif model_name.lower() == "xgboost":
+                        trainer.train_xgboost()
+                    elif model_name.lower() == "lstm":
+                        trainer.train_lstm()
+                    elif model_name.lower() == "logistic_regression":
+                        trainer.train_logistic_regression()
+                    elif model_name.lower() == "ensemble":
+                        if len(trainer.trained_models)<2:
+                            logger.warning("Need at least 2 trained models for ensemble. Training default models...")
+                            if "random_forest" not in trainer.trained_models:
+                                trainer.train_random_forest()
+                            if "xgboost" not in trainer.trained_models:
+                                trainer.train_xgboost()
+                        trainer.train_ensemble()
+                    else:
+                        logger.warning(f"Unknown model type: {model_name}. Skipping..")
+                except Exception as e:
+                    logger.error(f"Error training {model_name}: {str(e)}")
+            trainer.compare_models()
+            logger.info("Model training completed")
+        except Exception as e:
+            logger.error(f"Error during model training: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            sys.exit(1)
+
+
+
             
 
 

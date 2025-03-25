@@ -1,8 +1,12 @@
 from tqdm import tqdm
 import logging
+import re
+import numpy as np
 import pandas as pd
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
+import networkx as nx
+from sklearn.feature_extraction.text import TfidfVectorizer
 from typing import Optional
 
 
@@ -114,7 +118,7 @@ def extract_log_features(log_df:pd.DataFrame, time_window:str = "1D") -> pd.Data
     return feature_df
 
 def extract_email_features(email_df:pd.DataFrame, time_window:str="10", min_word_freq:int = 2,
-                           max_feature:int = 100) -> pd.DataFrame:
+                           max_features:int = 100) -> pd.DataFrame:
     """
     Extract features from email data using NLP techniques.
     
@@ -402,7 +406,7 @@ def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> p
 
     features = []
 
-    for time_window_start in tqdm(pd.date_range(start = df_index.min(), end =df.index.max(), freq = time_window),
+    for time_window_start in tqdm(pd.date_range(start = df.index.min(), end =df.index.max(), freq = time_window),
                                   desc = "Processing time wiwndows for network analysis"):
         time_window_end = time_window_start - pd.Timedelta(time_window)
         window_data = df.loc[time_window_start:time_window_end].reset_index()
