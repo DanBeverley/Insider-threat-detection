@@ -176,3 +176,260 @@ class ThreadPredictor:
                                        "prediction":int(ensemble_prob > self.threshold)}
         return predictions
     
+    def predict_batch(
+        self,
+        input_data: Union[str, pd.DataFrame],
+        include_input: bool = False,
+        output_prefix: str = 'prediction'
+    ) -> str:
+        """
+        Make predictions for a batch of data.
+        
+        Args:
+            input_data: Path to input data file or DataFrame
+            include_input: Whether to include input data in the output
+            output_prefix: Prefix for output file name
+        
+        Returns:
+            Path to the saved predictions file
+        """
+        logger.info("Starting batch prediction")
+        
+        # Load data if path provided
+        if isinstance(input_data, str):
+            try:
+                file_extension = Path(input_data).suffix.lower()
+                if file_extension == ".csv":
+                    df = pd.read_csv(input_data)
+                elif file_extension in [".xls", ".xlsx"]:
+                    df = pd.read_excel(input_data)
+                elif file_extension == ".parquet":
+                    df = pd.read_parquet(input_data)
+                elif file_extension == ".pickle" or file_extension == ".pkl":
+                    df = pd.read_pickle(input_data)
+                else:
+                    raise ValueError(f"Unsupported file format: {file_extension}")
+                
+                logger.info(f"Loaded input data with shape: {df.shape}")
+            except Exception as e:
+                logger.error(f"Error loading input data: {str(e)}")
+                raise
+        else:
+            df = input_data
+        
+        # Store metadata columns
+        metadata_cols = ['user_id', 'time_window_start', 'time_window_end']
+        metadata = {}
+        for col in metadata_cols:
+            if col in df.columns:
+                metadata[col] = df[col]
+                df = df.drop(columns=[col])
+        
+        # Use features from model if available
+        X = df.copy()
+        if self.feature_names is not None:
+            missing_features = set(self.feature_names) - set(X.columns)
+            extra_features = set(X.columns) - set(self.feature_names)
+            
+            if missing_features:
+                logger.warning(f"Missing features: {missing_features}")
+                for feature in missing_features:
+                    X[feature] = 0  # Fill with default value
+            
+            if extra_features:
+                logger.warning(f"Extra features will be ignored: {extra_features}")
+                
+            # Select and reorder columns to match expected order
+            X = X[[col for col in self.feature_names if col in X.columns]]
+        
+        # Apply preprocessing if available
+        if self.scaler is not None:
+            X_scaled = self.scaler.transform(X)
+            X = pd.DataFrame(X_scaled, columns=X.columns)
+        
+        # Make predictions with each model
+        results = {}
+        for name, model in self.models.items():
+            try:
+                logger.info(f"Making predictions with {name} model")
+                
+                # Handle different model types
+                if isinstance(model, tf.keras.Model):
+                    # Create sequences for LSTM models
+                    sequence_length = 5  # Default, should match training
+                    X_seq = self._create_sequences(X, sequence_length)
+                    
+                    y_pred_prob = model.predict(X_seq)
+                    
+                    # Predictions only available for records after sequence_length
+                    prob_series = pd.Series([float('nan')] * len(X), index=X.index)
+                    pred_series = pd.Series([float('nan')] * len(X), index=X.index)
+                    
+                    # Map predictions back to original indices
+                    prob_series.iloc[sequence_length:] = y_pred_prob.flatten()
+                    pred_series.iloc[sequence_length:] = (y_pred_prob.flatten() > self.threshold).astype(int)
+                    
+                    results[f"{name}_probability"] = prob_series
+                    results[f"{name}_prediction"] = pred_series
+                
+                else:
+                    # Standard ML models
+                    if hasattr(model, 'predict_proba'):
+                        probabilities = model.predict_proba(X)[:, 1]
+                    else:
+                        probabilities = model.predict(X)
+                    
+                    predictions = (probabilities > self.threshold).astype(int)
+                    
+                    results[f"{name}_probability"] = probabilities
+                    results[f"{name}_prediction"] = predictions
+            
+            except Exception as e:
+                logger.error(f"Error making predictions with {name} model: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # Calculate ensemble prediction if requested
+        if self.use_ensemble and results:
+            probability_cols = [col for col in results.keys() if col.endswith('_probability')]
+            if probability_cols:
+                # Create DataFrame from results
+                results_df = pd.DataFrame(results)
+                
+                # Calculate mean probability across models
+                results_df['ensemble_probability'] = results_df[probability_cols].mean(axis=1)
+                results_df['ensemble_prediction'] = (results_df['ensemble_probability'] > self.threshold).astype(int)
+                
+                # Convert back to dictionary
+                results = results_df.to_dict('list')
+        
+        # Create output DataFrame
+        output_df = pd.DataFrame(results)
+        
+        # Add metadata columns back
+        for col, values in metadata.items():
+            output_df[col] = values
+        
+        # Include input data if requested
+        if include_input:
+            for col in df.columns:
+                output_df[f"input_{col}"] = df[col]
+        
+        # Save predictions
+        timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(self.output_dir, f"{output_prefix}_{timestamp}.csv")
+        output_df.to_csv(output_path, index=False)
+        
+        logger.info(f"Saved {len(output_df)} predictions to {output_path}")
+        
+        return output_path
+    
+    def _create_sequences(self, X: pd.DataFrame, sequence_length: int) -> np.ndarray:
+        """
+        Create sequences for LSTM model prediction.
+        
+        Args:
+            X: Feature data
+            sequence_length: Length of each sequence
+        
+        Returns:
+            Numpy array of sequences
+        """
+        X_values = X.values
+        sequences = []
+        
+        for i in range(len(X_values) - sequence_length + 1):
+            sequences.append(X_values[i:i+sequence_length])
+        
+        return np.array(sequences)
+    
+    def predict_stream(
+        self,
+        stream_func: callable,
+        batch_size: int = 1000,
+        output_callback: Optional[callable] = None
+    ) -> None:
+        """
+        Make predictions on a stream of data.
+        
+        Args:
+            stream_func: Function that yields batches of data
+            batch_size: Number of records to process at once
+            output_callback: Function to call with prediction results
+        """
+        logger.info(f"Starting stream prediction with batch_size={batch_size}")
+        
+        batch_num = 0
+        
+        for data_batch in stream_func(batch_size):
+            batch_num += 1
+            logger.info(f"Processing batch {batch_num}")
+            
+            # Make predictions
+            if isinstance(data_batch, list):
+                # List of dictionaries (single records)
+                predictions = [self.predict_single(record) for record in data_batch]
+                results = predictions
+            else:
+                # DataFrame batch
+                output_path = self.predict_batch(
+                    data_batch,
+                    include_input=False,
+                    output_prefix=f"stream_batch_{batch_num}"
+                )
+                results = pd.read_csv(output_path)
+            
+            # Call output callback if provided
+            if output_callback is not None:
+                output_callback(results)
+        
+        logger.info(f"Completed stream prediction, processed {batch_num} batches")
+
+
+def main():
+    """Parse command line arguments and run prediction."""
+    parser = argparse.ArgumentParser(description='Make predictions for insider threat detection')
+    parser.add_argument('--models', type=str, default=str(MODELS_DIR),
+                      help='Directory containing trained models')
+    parser.add_argument('--data', type=str, required=True,
+                      help='Path to input data file')
+    parser.add_argument('--output', type=str, default=str(PREDICTIONS_DIR),
+                      help='Directory to save prediction results')
+    parser.add_argument('--model-names', type=str, nargs='+', default=None,
+                      help='Names of models to use (if None, use all available models)')
+    parser.add_argument('--threshold', type=float, default=0.5,
+                      help='Decision threshold for binary classification')
+    parser.add_argument('--ensemble', action='store_true',
+                      help='Use ensemble prediction (average of all models)')
+    parser.add_argument('--include-input', action='store_true',
+                      help='Include input data in the output')
+    parser.add_argument('--output-prefix', type=str, default='prediction',
+                      help='Prefix for output file name')
+    
+    args = parser.parse_args()
+    
+    try:
+        # Initialize predictor
+        predictor = ThreatPredictor(
+            model_dir=args.models,
+            model_names=args.model_names,
+            threshold=args.threshold,
+            output_dir=args.output,
+            use_ensemble=args.ensemble
+        )
+        
+        # Make predictions
+        output_path = predictor.predict_batch(
+            args.data,
+            include_input=args.include_input,
+            output_prefix=args.output_prefix
+        )
+        
+        print(f"Predictions saved to: {output_path}")
+        
+    except Exception as e:
+        logger.error(f"Error during prediction: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
+    
