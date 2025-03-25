@@ -132,3 +132,95 @@ class ModelTrainer:
             logger.error(f"Error loading data: {str(e)}")
             raise
 
+    def preprocess_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Preprocess data for training:
+        - Handle missing values
+        - Split into train and test sets
+        - Scale features if needed
+        - Handle class imbalance if needed
+        
+        Returns:
+            Tuple of (X_train, X_test, y_train, y_test)
+        """
+        logger.info("Preprocessing data for training")
+        if self.data is None:
+            self.load_data()
+        # Check if column data exists
+        if self.target_column not in self.data.columns:
+            raise ValueError(f"Target column '{self.target_column}' not found in data")
+        
+        df = self.data.copy()
+
+        if df[self.target_column].isnull().any():
+            original_len = len(df)
+            df = df.dropna(subset=[self.target_column])
+            logger.info(f"Dropped {original_len - len(df)} rows with missing target values")
+        
+        # Splitting
+        X = df.drop(columns = [self.target_column, "user_id", "time_window_start", "time_window_end"]
+                    if all(col in df.columns for col in ["user_id", "time_window_start", "time_window_end"])
+                    else self.target_column)
+        y = df[self.target_column]
+
+        self.feature_names = X.columns.tolist()
+
+        # For any missing values in features, fill with median/mode
+        numeric_cols = X.select_dtypes(include = ["int64", "float64"]).columns
+        categorical_cols = X.select_dtypes(include = ["object", "category"]).columns
+
+        for col in numeric_cols:
+            if X[col].isnull().any():
+                X[col] = X[col].fillna(X[col].median())
+        for col in categorical_cols:
+            if X[col].isnull().any():
+                X[col] = X[col].fillna(X[col].mode()[0])
+
+        # Train and test sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size = self.test_size, random_state=self.random_state, stratify=y
+        )
+        logger.info(f"Split data into train({X_train.shape[0]} sampels) and test({X_test.shape[0]} samples) sets")
+        # Scale features if needed
+        if self.scale_features:
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(test)
+            self.scaler = scaler
+            # Save scaler for later use
+            scaler_path = os.path.join(self.output_dir, "scaler.pkl")
+            with open(scaler_path, "wb") as f:
+                pickle.dump(scaler, f)
+            logger.info(f"Scaled features and saved scaler to {scaler_path}")
+            # Convert back to DataFrame for column names preserving
+            X_train = pd.DataFrame(X_train_scaled, columns = X_train.columns, index = X_train.index)
+            X_test = pd.DataFrame(X_test_scaled, columns = X_test.columns, index = X_test.index)
+        # Check for class imbalance
+        class_counts = np.bincount(y_train)
+        if len(class_counts)>1:
+            minority_class_percent = 100 * class_count.min() / class_counts.sum()
+            logger.info(f"Class distribution in training set: {class_counts}")
+            logger.info(f"Minority class percentage: {minority_class_percent:.2f}%")
+            # Handle class imbalance if needed
+            if self.handle_imbalance:
+                original_shape = X_train.shape
+                if self.handle_imbalance == "smote":
+                    smote = SMOTE(random_state=self.random_state)
+                    X_train_values, y_train_values = smote.fit_resample(X_train, y_train)
+                    X_train = pd.DataFrame(X_train_values, columns = X_train.columns)
+                    y_train = pd.Series(y_train_values, name = y_train.name)
+                    logger.info(f"Applied SMOTE to handle class imbalance. New shape: {X_train.shape}")
+                elif self.handle_imbalance == "undersampling":
+                    undersampler = RandomUnderSampler(random_state = self.random_state)
+                    X_train_values, y_train_values = undersampler.fit_resample(X_train, y_train)
+                    X_train = pd.DataFrame(X_train_values, columns = X_train.columns)
+                    y_train = pd.Series(y_train_values, name = y_train.name)
+                    logger.info(f"Applied undersampling to handle class imbalance. New shape: {X_train.shape}")
+            
+            self.X_train, self.X_test = X_train, X_test
+            self.y_train, self.y_test = y_train, y_test
+            return X_train, X_test, y_train, y_test
+        
+
+
+
