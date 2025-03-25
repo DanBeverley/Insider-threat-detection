@@ -15,6 +15,7 @@ Handles:
 import os
 import sys
 import logging
+import time
 import pickle
 import json
 import numpy as np
@@ -220,7 +221,164 @@ class ModelTrainer:
             self.X_train, self.X_test = X_train, X_test
             self.y_train, self.y_test = y_train, y_test
             return X_train, X_test, y_train, y_test
+    
+    def train_random_forest(self, param_grid:Optional[Dict] = None) -> RandomForestClassifier:
+        """
+        Train a Random Forest Classifier with optional hyperparameter tuning.
         
+        Args:
+            param_grid: Dictionary of hyperparameters for grid search
+                        (if None, default parameters are used)
+        
+        Returns:
+            Trained Random Forest model
+        """
+        logger.info("Training Random Forest model")
+        # Ensure data is preprocessed
+        if self.X_train is None or self.y_train is None:
+            self.preprocess_data()
+        # Default parameter grid if none provided
+        if param_grid is None:
+            param_grid = {
+                "n_estimators":[100,200],
+                "max_depth":[None, 10, 20],
+                "min_samples_split":[2,5],
+                "min_samples_leaf":[1,2],
+                "max_features":["sqrt", "log2"]
+            }
+        # Initialize base model
+        if self.handle_imbalance == "class_weight":
+            rf = RandomForestClassifier(random_state = self.random_state, class_weight = "balanced")
+        else:
+            rf = RandomForestClassifier(random_state = self.random_state)
+        
+        start_time = time.time()
+        cv = StratifiedKFold(n_splits = 5, shuffle=True, random_state = self.random_state)
+        grid_search = GridSearchCV(esimator = rf,
+                                   param_grid = param_grid,
+                                   cv = cv,
+                                   n_jobs = -1,
+                                   scoring = "f1",
+                                   verbose = 1)
+        grid_search.fit(self.X_train, self.y_train)
+        training_time = time.time() - start_time
+
+        best_model = grid_search.best_estimator_
+        logger.info(f"Best parameters: {grid_search.best_params_}")
+        logger.info(f"Training time: {training_time:.2f} seconds")
+
+        model_path = os.path.join(self.output_dir, "random_forest_model.pkl")
+        with open(model_path, "r") as f:
+            pickle.dump(best_model, f)
+        
+        params_path = os.path.join(self.output_dir, "random_forest_params.json")
+        with open(params_path, "w") as f:
+            json.dump(grid_search.best_params_, f, indent = 4)
+
+        logger.info(f"Saved Random Forest model to {model_path}")
+
+        # Evaluate model
+        y_pred = best_model.predict(self.X_test)
+        y_prob = best_model.predict_proba(self.X_test)[:, 1]
+        metrics = self._calculate_metrics(self.y_test, y_pred, y_prob)
+        self.model_metrics["random_forest"] = metrics
+
+        # Store model
+        self.trained_models["random_forest"] = best_model
+
+        # Get feature importance
+        feature_importance = pd.DataFrame((
+            "feature":self.feature_names,
+            "importance":best_model.feature_importance_
+        )).sort_values("importance", ascending = False)
+
+        # Save feature importance
+        importance_path = os.path.join(self.output_dir, "random_forest_feature_importance.csv")
+        feature_importance.to_csv(importance_path, index = False)
+        logger.info(f"Top 10 importance features: \n{feature_importance.head(10)}")
+        return best_model
+
+    def train_xgboost(self, param_grid:Optional[Dict] = None) -> xgb.XGBClassifier:
+        """
+        Train an XGBoost model with hyperparameter tuning.
+        
+        Args:
+            param_grid: Dictionary of hyperparameters for grid search
+                        (if None, default parameters are used)
+        
+        Returns:
+            Trained XGBoost model
+        """
+        logger.info("Training XGBoost model")
+        
+        if self.X_train is None or self.y_train is None:
+            self.preprocess_data()
+        if param_grid is None:
+            param_grid = {
+                "n_estimators":[100, 200],
+                "max_depth":[3, 6, 9],
+                "learning_rate":[0.01, 0.1, 0.2],
+                "subsample":[0.8, 1.0],
+                "colsample_bytree":[0.8, 1.0],
+                "gamma":[0, 0.1]
+            }
+        # Initialize base model
+        if self.handle_imbalance == "class_weight":
+            scale_pos_weight = ((self.y_train == 0).sum() / (self.y_train == 1).sum()) if (self.y_train == 1).sum() > 0 else 1
+            xgb_model = xgb.XGBClassifier(random_state=self.random_state, scale_pos_weight=scale_pos_weight)
+        else:
+            xgb_model = xgb.XGBClassifier(random_state=self.random_state)
+        # Use RandomizedSearchCV instead of GridSearchCV for efficiency
+        start_time = time.time()
+        cv = StratifiedKFold(n_splits = 5, shuffle=True, random_state=self.random_state)
+        random_search = RandomizedSearchCV(estimator=xgb_model,
+                                           param_distributions=param_grid,
+                                           n_iter = 10,
+                                           cv = cv,
+                                           n_jobs =-1,
+                                           scoring = "f1",
+                                           verbose = 1,
+                                           random_state = self.random_state)
+        random_search.fit(self.X_train, self.y_train, eval_metric = "auc")
+        training_time = time.time() - start_time
+
+        best_model = random_search.best_estimator_
+        logger.info(f"Best parameters: {random_search.best_params_}")
+        logger.info(f"Training time: {training_time:.2f]} seconds")
+
+        model_path = os.path.join(self.output_dir, "xgboost_model.pkl")
+        with open(model_path, "r") as f:
+            pickle.dump(best_model, f)
+        params_path = os.path.join(self.output_dir, "xgboost_params.json")
+        with open(params_path, "w") as f:
+            json.dump(random_search.best_params_, f, indent = 4)
+        logger.info(f"Saved XGBoost model to {model_path}")
+
+        # Evaluate model
+        y_pred = best_model.predict(self.X_test)
+        y_prob = best_model.predict_proba(self.X_test)[:, 1]
+        
+        metrics = self._calculate_metrics(self.y_test, y_pred, y_prob)
+        self.model_metrics['xgboost'] = metrics
+        
+        # Store model
+        self.trained_models['xgboost'] = best_model
+        
+        # Get feature importance
+        feature_importance = pd.DataFrame({
+            'feature': self.feature_names,
+            'importance': best_model.feature_importances_
+        }).sort_values('importance', ascending=False)
+        
+        # Save feature importance
+        importance_path = os.path.join(self.output_dir, "xgboost_feature_importance.csv")
+        feature_importance.to_csv(importance_path, index=False)
+        
+        logger.info(f"Top 10 important features: \n{feature_importance.head(10)}")
+        
+        return best_model
+
+
 
 
 
