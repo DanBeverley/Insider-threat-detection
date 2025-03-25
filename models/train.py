@@ -378,6 +378,124 @@ class ModelTrainer:
         
         return best_model
 
+    def train_lstm(self, sequence_length:int = 5, lstm_units:int=64, epochs:int=50, batch_size:int = 32)->tf.keras.Model:
+        """
+        Train an LSTM model for sequential data analysis.
+        
+        Args:
+            sequence_length: Number of time steps in each sequence
+            lstm_units: Number of LSTM units
+            epochs: Maximum number of training epochs
+            batch_size: Batch size for training
+        
+        Returns:
+            Trained LSTM model
+        """
+        logger.info("Training LSTM model")
+        if self.X_train is None or self.y_train is None:
+            self.preprocess_data()
+        # Create sequence for LSTM
+        X_train_seq, y_train_seq = self._create_sequences(self.X_train, self.y_train, sequence_length)
+        X_test_seq, y_test_seq = self._create_sequences(self.X_test, self.y_test, sequence_length)
+        logger.info(f"Created sequences: X_train_seq: {X_train_seq.shape}, y_train_seq: {y_train_seq.shape}")
+
+        model = Sequential([LSTM(lstm_units, activation="relu", input_shape=(sequence_length, self.X_train.shape[1])),
+                            Dropout(0.2),
+                            Dense(32, activation = "relu"),
+                            Dropout(0.2),
+                            Dense(1, activation = "sigmoid")])
+        model.compile(optimizer = Adam(learning_rate=0.001),
+                      loss="binary_crossentropy",
+                      metrics=["accuracy", tf.keras.metrics.AUC(), tf.keras.metrics.Precision(),
+                                           tf.keras.metrics.Recall()])
+        callbacks = [
+            EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=0.0001),
+            ModelCheckpoint(os.path.join(self.output_dir, "lstm_model_checkpoint.h5"),
+                            monitor = "val_loss",
+                            save_best_only = True)]
+        # Calculate class weights for instanced data
+        if self.handle_imbalance == "class_weight":
+            class_weight = {
+                0:1.0,
+                1:(y_train_seq==0).sum() / (y_train_seq == 1).sum() if (y_train_seq == 1).sum() > 0 else 1.0
+            }
+        else:
+            class_weight = None
+        
+        start_time = time.time()
+        history = model.fit(X_train_seq, y_train_seq,
+                            epochs = epochs,
+                            batch_size = batch_size,
+                            validation_split = 0.2,
+                            callbacks = callbacks,
+                            class_weight = class_weight,
+                            verbose = 1)
+        training_time = time.time() - start_time
+        logger.info(f"LSTM training completed in {training_time:.2f} seconds")
+        model_path = os.path.join(self.output_dir, "lstm_model.h5")
+        model.save(model_path)
+        # Save model architecture as image
+        try:
+            architecture_path = os.path.join(self.output_dir, "lstm_architecture.png")
+            plot_model(model, to_file = architecture_path, show_shapes = True, show_layer_names = True)
+            logger.info(f"Saved model architecture to {architecture_path}")
+        except Exception as e:
+            logger.warning(f"Could not save model architecture: {str(e)}")
+        # Save training history
+        history_path = os.path.join(self.output_dir, "lstm_history.json")
+        with open(history_path, "w") as f:
+            json.dump({k:[float(val) for val in v] for k, v in history.history.items()}, f, indent=4)
+        logger.info(f"Saved LSTM model to {model_path}")
+
+        # Evaluate model
+        y_pred_prob = model.predict(X_test_seq)
+        y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+
+        metrics = self._calculate_metrics(y_test_seq, y_pred, y_pred_prob.flatten())
+        self.model_metrics["lstm"] = metrics
+        self.trained_model["lstm"] = model
+        return model
+
+    def train_logistic_regression(self) -> LogisticRegression:
+        """
+        Train a logistic regression model as a baseline.
+        
+        Returns:
+            Trained logistic regression model
+        """
+        logger.info("Training Logistic Regression model {baseline}")
+        if self.X_train is None or self.y_train is None:
+            self.preprocess_data()
+        if self.handle_imbalance == "class_weight":
+            lr = LogisticRegression(max_iter = 1000, random_state=self.random_state, class_weight="balanced")
+        else:
+            lr = LogisticRegression(max_iter = 1000, random_state=self.random_state)
+        
+        start_time = time.time()
+        lr.fit(self.X_train, self.y_train)
+        training_time = time.time() - start_time
+        logger.info(f"Logistic Regression completed in {training_time:.2f} seconds")
+        # Save model
+        model_path = os.path.join(self.output_dir, "logistic_regression_model.pkl")
+        with open(model_path, "wb") as f:
+            pickle.dump(lr, f)
+        logger.info(f"Saved Logistic Regression model to {model_path}")
+
+        # Evaluate model
+        y_pred = lr.predict(self.X_test)
+        y_prob = lr.predict_proba(self.X_test)[:,1]
+
+        self.model_metrics["logistic_regression"] = self._calculate_metrics(self.y_test, y_pred, y_prob)
+        self.trained_models["logistic_regression"] = lr
+        feature_importance = pd.DataFrame({"feature":self.feature_names,
+                                            "coefficient":lr.coef_[0]}).sort_values("coefficient", ascending=True)
+        # Save feature importance
+        importance_path = os.path.join(self.output_dir, "logistic_regression_coefficients.csv")
+        feature_importance.to_csv(importance_path, index = False)
+        logger.info(f"10 features by coefficient magnitude: \n{feature_importance.head(10)}")
+        return lr
+            
 
 
 
