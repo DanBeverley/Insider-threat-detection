@@ -55,16 +55,13 @@ class ThreadPredictor:
         self.output_dir = output_dir
         self.use_ensemble = use_ensemble
 
-        # if the output dir doesn't exist, create one
         os.makedirs(output_dir, exist_ok = True)
 
-        # Containers
         self.models = {}
         self.scaler = None
         self.feature_names = None
         logger.info(f"Initialized ThreatPredictor with model_dir: {model_dir}, output_dir: {output_dir}")
 
-        # Load models
         self._load_models()
     
     def _load_models(self) -> Dict[str, Any]:
@@ -225,7 +222,7 @@ class ThreadPredictor:
                 metadata[col] = df[col]
                 df = df.drop(columns=[col])
         
-        # Use features from model if available
+        # Use features from model 
         X = df.copy()
         if self.feature_names is not None:
             missing_features = set(self.feature_names) - set(X.columns)
