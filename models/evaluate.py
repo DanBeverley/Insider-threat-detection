@@ -2,7 +2,7 @@
 """
 Evaluate trained machine learning models for insider threat detection.
 
-This script handles:
+Handles:
 - Loading trained models
 - Evaluating on test data
 - Generating performance metrics
@@ -33,7 +33,6 @@ import lime
 from lime import lime_tabular
 import tensorflow as tf
 
-# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -44,11 +43,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create plotting style
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("viridis")
 
-# Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models" / "trained_models"
@@ -86,11 +83,9 @@ class ModelEvaluator:
         self.output_dir = output_dir
         self.threshold = threshold
         
-        # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(os.path.join(output_dir, "figures"), exist_ok=True)
         
-        # Initialize containers
         self.models = {}
         self.model_metrics = {}
         self.predictions = {}
@@ -112,7 +107,6 @@ class ModelEvaluator:
             Dictionary of loaded models
         """
         if model_names is None:
-            # Find all model files in model_dir
             model_files = []
             for ext in ['.pkl', '.h5']:
                 model_files.extend(list(Path(self.model_dir).glob(f"*_model{ext}")))
@@ -147,7 +141,7 @@ class ModelEvaluator:
             else:
                 logger.warning(f"No model file found for {name}")
         
-        # Load feature names if available
+        # Load feature names 
         feature_importance_files = list(Path(self.model_dir).glob("*_feature_importance.csv"))
         if feature_importance_files:
             try:
@@ -157,7 +151,7 @@ class ModelEvaluator:
             except Exception as e:
                 logger.warning(f"Could not load feature names: {str(e)}")
         
-        # Load scaler if available
+        # Load scaler
         scaler_path = os.path.join(self.model_dir, "scaler.pkl")
         if os.path.exists(scaler_path):
             try:
@@ -796,6 +790,3 @@ def main():
         logger.error(traceback.format_exc())
         sys.exit(1)
 
-
-if __name__ == "__main__":
-    main() 
