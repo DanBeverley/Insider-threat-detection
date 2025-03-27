@@ -136,7 +136,7 @@ def clean_data(df:pd.DataFrame, drop_duplicates:bool = True, fill_missing:bool =
                 sample = df_clean[col].dropna().sample(min(10, len(df_clean))).astype(str)
                 if any(any(re.search(pattern, val) for pattern in timestamp_patterns)for val in sample):
                     try:
-                        df_clean[col] = pd.to_datetime(df_clean[col], errros="coerce")
+                        df_clean[col] = pd.to_datetime(df_clean[col], errors="coerce")
                         logger.info(f"Converted {col} to datetime based on pattern matching")
                     except:
                         logger.warning(f"Failed to convert {col} to datetime")
@@ -171,7 +171,7 @@ def normalize_data(df:pd.DataFrame, method:str = "z-score",
     cols_to_normalize = [col for col in numerical_cols if col not in exclude_cols]
 
     if not cols_to_normalize:
-        logger.into("No columns to normalize")
+        logger.info("No columns to normalize")
         return df, {}
     logger.info(f"Normalizing {len(cols_to_normalize)} columns using {method}")
     df_normalized = df.copy()
@@ -240,7 +240,7 @@ def preprocess_logs(log_df: pd.DataFrame) -> pd.DataFrame:
             # Drop temporary column
             df = df.drop(columns = ["new_session"])
     # Handle device connections if present
-    if any(df["activity"].str.contains("connect|disconnect", case=False, na=False) if "activity" in df.colums else []):
+    if any(df["activity"].str.contains("connect|disconnect", case=False, na=False) if "activity" in df.columns else []):
         # Flag unusual device connections (e.g., USB drives)
         device_connect = df["activity"].str.contains("connect", case = False, na = False)
         df["device_connection"] = device_connect.astype(int)
@@ -426,9 +426,9 @@ def main(input_dir:str = "../data/raw", output_dir:str = "../data/processed"):
             df, _ = normalize_data(df)
             # Apply specific preprocessing based on data type
             if df["data_type"].iloc[0] == "logs":
-                df = preprocess_logs[df]
+                df = preprocess_logs(df)
             elif df["data_type"].iloc[0] == "email":
-                df = preprocess_emails[df]
+                df = preprocess_emails(df)
             elif df["data_type"].iloc[0] == "file":
                 df = preprocess_file_access(df)
 
