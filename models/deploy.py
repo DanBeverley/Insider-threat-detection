@@ -31,7 +31,7 @@ from flask_cors import CORS
 from waitress import serve
 
 sys.path.append(str(Path(__file__).parent))
-from predict import ThreadPredictor
+from predict import ThreatPredictor
 
 logging.basicConfig(level=logging.INFO,
                     format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
