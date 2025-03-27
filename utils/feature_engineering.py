@@ -248,7 +248,7 @@ def extract_email_features(email_df:pd.DataFrame, time_window:str="10", min_word
             tfidf_df["time_window_start"] = [key[1] for key in keys]
             # Merge with other features
             feature_df = pd.merge(feature_df, tfidf_df, on=["user_id", "time_window_start"], how="left")
-    logger.info(f"Extracted {len(feature_df)} email feature records across {feature_df["user_id"].nunique()} users")
+    logger.info(f"Extracted {len(feature_df)} email feature records across {feature_df['user_id'].nunique()} users")
     return feature_df
 
 def extract_file_access_features(file_df:pd.DataFrame, time_window:str="1D") -> pd.DataFrame:
@@ -323,7 +323,7 @@ def extract_file_access_features(file_df:pd.DataFrame, time_window:str="1D") -> 
                     feature_dict["unique_files"] = window_data["file_name"].nunique()
                 features.append(feature_dict)
     feature_df = pd.DataFrame(features)
-    logger.info(f"Extract {len(feature_df)} file access feature records across {feature_df["user_id"].nunique()} users")
+    logger.info(f"Extract {len(feature_df)} file access feature records across {feature_df['user_id'].nunique()} users")
     return feature_df
 
 def create_user_profiles(log_features:Optional[pd.DataFrame] = None,
@@ -377,7 +377,7 @@ def create_user_profiles(log_features:Optional[pd.DataFrame] = None,
     # Convert NaN to 0 
     numeric_cols = merged_df.select_dtypes(include = ["int64", "float64"]).columns
     merged_df[numeric_cols] = merged_df[numeric_cols].fillna(0)
-    logger.info(f"Created user profiles with {len(merged_df)} records across {merged_df["user_id"].nunique()} users")
+    logger.info(f"Created user profiles with {len(merged_df)} records across {merged_df['user_id'].nunique()} users")
     return merged_df
 
 def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> pd.DataFrame:

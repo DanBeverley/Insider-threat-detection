@@ -46,11 +46,11 @@ from imblearn.under_sampling import RandomUnderSampler
 from imblearn.pipeline import Pipeline as ImbPipeline
 
 import tensorflow as tf
-from tf.keras.models import Sequential, Model, load_model, save_model
-from tf.keras.layers import Dense, LSTM, Dropout, Input, Concatenate
-from tf.keras.optimizers import Adam
-from tf.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-from tf.keras.utils import plot_model
+from tensorflow.keras.models import Sequential, Model, load_model, save_model
+from tensorflow.keras.layers import Dense, LSTM, Dropout, Input, Concatenate
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.utils import plot_model
 
 logging.basicConfig(level = logging.INFO, 
                     format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -186,7 +186,7 @@ class ModelTrainer:
         if self.scale_features:
             scaler = StandardScaler()
             X_train_scaled = scaler.fit_transform(X_train)
-            X_test_scaled = scaler.transform(test)
+            X_test_scaled = scaler.transform(X_test)
             self.scaler = scaler
             # Save scaler for later use
             scaler_path = os.path.join(self.output_dir, "scaler.pkl")
@@ -199,7 +199,7 @@ class ModelTrainer:
         # Check for class imbalance
         class_counts = np.bincount(y_train)
         if len(class_counts)>1:
-            minority_class_percent = 100 * class_count.min() / class_counts.sum()
+            minority_class_percent = 100 * class_counts.min() / class_counts.sum()
             logger.info(f"Class distribution in training set: {class_counts}")
             logger.info(f"Minority class percentage: {minority_class_percent:.2f}%")
             # Handle class imbalance if needed
@@ -254,7 +254,7 @@ class ModelTrainer:
         
         start_time = time.time()
         cv = StratifiedKFold(n_splits = 5, shuffle=True, random_state = self.random_state)
-        grid_search = GridSearchCV(esimator = rf,
+        grid_search = GridSearchCV(estimator = rf,
                                    param_grid = param_grid,
                                    cv = cv,
                                    n_jobs = -1,
@@ -268,7 +268,7 @@ class ModelTrainer:
         logger.info(f"Training time: {training_time:.2f} seconds")
 
         model_path = os.path.join(self.output_dir, "random_forest_model.pkl")
-        with open(model_path, "r") as f:
+        with open(model_path, "wb") as f:
             pickle.dump(best_model, f)
         
         params_path = os.path.join(self.output_dir, "random_forest_params.json")
@@ -288,8 +288,8 @@ class ModelTrainer:
 
         # Get feature importance
         feature_importance = pd.DataFrame({
-            "feature":self.feature_names,
-            "importance":best_model.feature_importance_
+            "feature": self.feature_names,
+            "importance": best_model.feature_importances_
         }).sort_values("importance", ascending = False)
 
         # Save feature importance
@@ -344,10 +344,10 @@ class ModelTrainer:
 
         best_model = random_search.best_estimator_
         logger.info(f"Best parameters: {random_search.best_params_}")
-        logger.info(f"Training time: {training_time:.2f]} seconds")
+        logger.info(f"Training time: {training_time:.2f} seconds")
 
         model_path = os.path.join(self.output_dir, "xgboost_model.pkl")
-        with open(model_path, "r") as f:
+        with open(model_path, "wb") as f:
             pickle.dump(best_model, f)
         params_path = os.path.join(self.output_dir, "xgboost_params.json")
         with open(params_path, "w") as f:
@@ -454,7 +454,7 @@ class ModelTrainer:
 
         metrics = self._calculate_metrics(y_test_seq, y_pred, y_pred_prob.flatten())
         self.model_metrics["lstm"] = metrics
-        self.trained_model["lstm"] = model
+        self.trained_models["lstm"] = model
         return model
 
     def train_logistic_regression(self) -> LogisticRegression:
