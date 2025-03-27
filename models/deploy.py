@@ -64,7 +64,7 @@ class ModelDeployer:
         self.model_names = model_names
         self.deployment_dir = deployment_dir
         self.config = config or {}
-        set.default_config = {"api_port":8000,
+        self.default_config = {"api_port":8000,
                               "batch_size":32,
                               "enable_cors":True,
                               "model_threshold":0.5,
@@ -156,7 +156,7 @@ class ModelDeployer:
             # Metadata file
             metadata = {
                 "package_name":package_name,
-                "created_at":datetime.now().isformat(),
+                "created_at":datetime.now().isoformat(),
                 "models":self.model_names,
                 "config":self.config,
                 "files":[os.path.basename(f) for f in packaged_files]
@@ -438,52 +438,52 @@ if __name__ == "__main__":
             if process:
                 process.terminate()
     
-    def main():
-        """Parse command line arguments and run the deployer."""
-        parser = argparse.ArgumentParser(description='Deploy insider threat detection models')
-        parser.add_argument('--models', type=str, default=str(MODELS_DIR),
-                        help='Directory containing trained models')
-        parser.add_argument('--output', type=str, default=str(DEPLOYMENT_DIR),
-                        help='Directory to store deployment artifacts')
-        parser.add_argument('--model-names', type=str, nargs='+', default=None,
-                        help='Names of models to deploy (if None, deploy all available models)')
-        parser.add_argument('--package-name', type=str, default=None,
-                        help='Name of the deployment package')
-        parser.add_argument('--port', type=int, default=None,
-                        help='Port to run the API server on')
-        parser.add_argument('--threshold', type=float, default=0.5,
-                        help='Decision threshold for binary classification')
-        parser.add_argument('--ensemble', action='store_true',
-                        help='Use ensemble prediction (average of all models)')
-        parser.add_argument('--optimize', action='store_true',
-                        help='Optimize models for inference')
-        parser.add_argument('--serve', action='store_true',
-                        help='Start API server after packaging')
-        
-        args = parser.parse_args()
+def main():
+    """Parse command line arguments and run the deployer."""
+    parser = argparse.ArgumentParser(description='Deploy insider threat detection models')
+    parser.add_argument('--models', type=str, default=str(MODELS_DIR),
+                    help='Directory containing trained models')
+    parser.add_argument('--output', type=str, default=str(DEPLOYMENT_DIR),
+                    help='Directory to store deployment artifacts')
+    parser.add_argument('--model-names', type=str, nargs='+', default=None,
+                    help='Names of models to deploy (if None, deploy all available models)')
+    parser.add_argument('--package-name', type=str, default=None,
+                    help='Name of the deployment package')
+    parser.add_argument('--port', type=int, default=None,
+                    help='Port to run the API server on')
+    parser.add_argument('--threshold', type=float, default=0.5,
+                    help='Decision threshold for binary classification')
+    parser.add_argument('--ensemble', action='store_true',
+                    help='Use ensemble prediction (average of all models)')
+    parser.add_argument('--optimize', action='store_true',
+                    help='Optimize models for inference')
+    parser.add_argument('--serve', action='store_true',
+                    help='Start API server after packaging')
+    
+    args = parser.parse_args()
 
-        try:
-            config = {
-                "api_port":args.port or 8000,
-                "model_threshold":args.threshold,
-                "use_ensemble":args.ensemble,
-                "optimize_for_inference":args.optimize
-            }
-            deployer = ModelDeployer(model_dir = args.models,
-                                    model_names = args.model_names,
-                                    deployment_dir = args.output,
-                                    config = config)
-            package_path = deployer.package_models(args.package_name)
-            print(f"Deployment package created at: {package_path}")
+    try:
+        config = {
+            "api_port":args.port or 8000,
+            "model_threshold":args.threshold,
+            "use_ensemble":args.ensemble,
+            "optimize_for_inference":args.optimize
+        }
+        deployer = ModelDeployer(model_dir = args.models,
+                                model_names = args.model_names,
+                                deployment_dir = args.output,
+                                config = config)
+        package_path = deployer.package_models(args.package_name)
+        print(f"Deployment package created at: {package_path}")
 
-            if args.serve:
-                package_dir = os.path.dirname(package_path)
-                deployer.start_api_server(package_dir, args.port)
-        except Exception as e:
-            logger.error(f"Error during deployment: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            sys.exit(1)
+        if args.serve:
+            package_dir = os.path.dirname(package_path)
+            deployer.start_api_server(package_dir, args.port)
+    except Exception as e:
+        logger.error(f"Error during deployment: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
 
 
                 

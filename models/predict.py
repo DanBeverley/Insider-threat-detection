@@ -22,7 +22,7 @@ from pathlib import Path
 import tensorflow as tf
 
 logging.basicConfig(level = logging.INFO,
-                    format = "%(format) - %(name)s - %(levelname)s - %(message)s",
+                    format = "%(asctime) - %(name)s - %(levelname)s - %(message)s",
                     handlers=[logging.FileHandler("prediction.log"),
                               logging.StreamHandler()])
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ MODELS_DIR = PROJECT_ROOT / "models" / "trained_models"
 INTERIM_DATA_DIR = DATA_DIR / "interim"
 PREDICTIONS_DIR = PROJECT_ROOT / "predictions"
 
-class ThreadPredictor:
+class ThreatPredictor:
     def __init__(self, model_dir:str=str(MODELS_DIR),
                 model_names:Optional[List[str]] = None,
                 threshold:float=0.5,
@@ -80,7 +80,7 @@ class ThreadPredictor:
                 try:
                     with open(model_path_pkl, "rb") as f:
                         model = pickle.load(f)
-                    self.model[name] = model
+                    self.models[name] = model
                     logger.info(f"Loaded {name} model from {model_path_pkl}")
                 except Exception as e:
                     logger.error(f"Error loading {name} model from {model_path_pkl}:{str(e)}")
