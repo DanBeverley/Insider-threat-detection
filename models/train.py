@@ -287,10 +287,10 @@ class ModelTrainer:
         self.trained_models["random_forest"] = best_model
 
         # Get feature importance
-        feature_importance = pd.DataFrame((
+        feature_importance = pd.DataFrame({
             "feature":self.feature_names,
             "importance":best_model.feature_importance_
-        )).sort_values("importance", ascending = False)
+        }).sort_values("importance", ascending = False)
 
         # Save feature importance
         importance_path = os.path.join(self.output_dir, "random_forest_feature_importance.csv")

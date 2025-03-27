@@ -114,7 +114,7 @@ def extract_log_features(log_df:pd.DataFrame, time_window:str = "1D") -> pd.Data
                 features.append(feature_dict)
     # Convert features to DataFrame
     feature_df = pd.DataFrame(features)
-    logger.info(f"Extracted {len(feature_df)} log feature records across {feature_df["user_id"].nunique()} users")
+    logger.info(f"Extracted {len(feature_df)} log feature records across {feature_df['user_id'].nunique()} users")
     return feature_df
 
 def extract_email_features(email_df:pd.DataFrame, time_window:str="10", min_word_freq:int = 2,
