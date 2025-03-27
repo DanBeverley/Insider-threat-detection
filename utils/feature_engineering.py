@@ -311,7 +311,7 @@ def extract_file_access_features(file_df:pd.DataFrame, time_window:str="1D") -> 
                     common_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.zip', '.exe']
                     for ext in common_extensions:
                         count = extension_counts.get(ext, 0)
-                        feature_dict[f"{ext.replace(".", "")}_count"] = count
+                        feature_dict[f"{ext.replace('.', '')}_count"] = count
                     # Sensitive file types
                     if "is_sensitive_file_types" in window_data.columns:
                         feature_dict["sensitive_file_type_ratio"] = window_data["is_sensitive_file_type"].mean()

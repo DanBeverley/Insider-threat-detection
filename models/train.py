@@ -69,7 +69,7 @@ class ModelTrainer:
                 target_column:str = "insider_threat",
                 test_size:float=0.2,
                 random_state:int = 42,
-                output_dir:str = str(MODEL_DIR),
+                output_dir:str = str(MODELS_DIR),
                 scale_features:bool = True,
                 handle_imbalance:str = "smote"):
         """        
