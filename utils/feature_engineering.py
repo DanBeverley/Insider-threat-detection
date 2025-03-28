@@ -368,7 +368,7 @@ def create_user_profiles(log_features:Optional[pd.DataFrame] = None,
                                                                                   "time_window_end"]}
         df = df.rename(columns = rename_cols)
         if merged_df is None:
-            merged_df = df.opy()
+            merged_df = df.copy()
         else:
             merged_df = pd.merge(merged_df, df, on=["user_id", "time_window_start"], how="outer")
     if merged_df is None:
@@ -399,7 +399,7 @@ def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> p
         return pd.DataFrame()
     df = email_df.copy()
     # Ensure timestamp is datetime
-    if "timestamp" in email_df.columns and not pd.api.types.is_datatime64_any_dtype(df["timestamp"]):
+    if "timestamp" in email_df.columns and not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
        df["timestamp"] = pd.to_datetime(df["timestamp"], errors = "coerce")
     # Timestamp as index for resampling
     df = df.set_index("timestamp")
@@ -407,7 +407,7 @@ def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> p
     features = []
 
     for time_window_start in tqdm(pd.date_range(start = df.index.min(), end =df.index.max(), freq = time_window),
-                                  desc = "Processing time wiwndows for network analysis"):
+                                  desc = "Processing time windows for network analysis"):
         time_window_end = time_window_start - pd.Timedelta(time_window)
         window_data = df.loc[time_window_start:time_window_end].reset_index()
         if len(window_data) == 0:
@@ -433,7 +433,7 @@ def extract_network_features(email_df:pd.DataFrame, time_window:str = "70") -> p
                 in_degree = G.in_degree(user)
                 out_degree = G.out_degree(user)
                 try:
-                    betweenness = nx.betweeness_centrality(G)[user]
+                    betweenness = nx.betweenness_centrality(G)[user]
                 except:
                     betweenness = 0
 
@@ -490,7 +490,7 @@ def analyze_temporal_patterns(df:pd.DataFrame, time_col:str="timestamp", user_co
     logger.info("Analyzing temporal patterns in user behavior...")
     if time_col not in df.columns or user_col not in df.columns:
         logger.error(f"Required columns missing. Need {time_col} and {user_col}")
-        return pd.Dataframe()
+        return pd.DataFrame()
     
     data = df.copy()
 

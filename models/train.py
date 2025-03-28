@@ -158,30 +158,54 @@ class ModelTrainer:
             df = df.dropna(subset=[self.target_column])
             logger.info(f"Dropped {original_len - len(df)} rows with missing target values")
         
-        # Splitting
-        X = df.drop(columns = [self.target_column, "user_id", "time_window_start", "time_window_end"]
-                    if all(col in df.columns for col in ["user_id", "time_window_start", "time_window_end"])
-                    else self.target_column)
+        # Remove metadata columns
+        metadata_cols = ["user_id", "time_window_start", "time_window_end"]
+        drop_cols = [col for col in metadata_cols if col in df.columns]
+        drop_cols.append(self.target_column)
+        
+        X = df.drop(columns=drop_cols)
         y = df[self.target_column]
 
-        self.feature_names = X.columns.tolist()
-
+        # Log initial column types
+        logger.info(f"Data types before preprocessing:\n{X.dtypes.value_counts()}")
+        
         # For any missing values in features, fill with median/mode
-        numeric_cols = X.select_dtypes(include = ["int64", "float64"]).columns
-        categorical_cols = X.select_dtypes(include = ["object", "category"]).columns
-
+        numeric_cols = X.select_dtypes(include=["int64", "float64"]).columns
+        categorical_cols = X.select_dtypes(include=["object", "category", "bool"]).columns
+        
+        logger.info(f"Found {len(numeric_cols)} numeric columns and {len(categorical_cols)} categorical columns")
+        
+        # Handle missing values
         for col in numeric_cols:
             if X[col].isnull().any():
                 X[col] = X[col].fillna(X[col].median())
+        
         for col in categorical_cols:
             if X[col].isnull().any():
                 X[col] = X[col].fillna(X[col].mode()[0])
-
+        
+        # Handle categorical features - one-hot encode them
+        if len(categorical_cols) > 0:
+            logger.info(f"One-hot encoding {len(categorical_cols)} categorical columns")
+            # Use pandas get_dummies for one-hot encoding
+            X_encoded = pd.get_dummies(X, columns=list(categorical_cols), drop_first=True)
+            logger.info(f"After one-hot encoding: {X_encoded.shape[1]} features")
+            X = X_encoded
+        
+        # Check if all columns are now numeric
+        non_numeric_cols = X.select_dtypes(exclude=["int64", "float64"]).columns
+        if len(non_numeric_cols) > 0:
+            logger.warning(f"Found {len(non_numeric_cols)} non-numeric columns after encoding: {list(non_numeric_cols)}")
+            logger.warning("Dropping these columns to proceed with model training")
+            X = X.drop(columns=non_numeric_cols)
+        
+        self.feature_names = X.columns.tolist()
+        
         # Train and test sets
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size = self.test_size, random_state=self.random_state, stratify=y
+            X, y, test_size=self.test_size, random_state=self.random_state, stratify=y
         )
-        logger.info(f"Split data into train({X_train.shape[0]} sampels) and test({X_test.shape[0]} samples) sets")
+        logger.info(f"Split data into train({X_train.shape[0]} samples) and test({X_test.shape[0]} samples) sets")
         # Scale features if needed
         if self.scale_features:
             scaler = StandardScaler()
@@ -628,7 +652,7 @@ class ModelTrainer:
         for i in range(len(X_values) - sequence_length):
             X_sequences.append(X_values[i:i+sequence_length])
             y_sequences.append(y_values[i+sequence_length])
-        return np.ndarray(X_sequences), np.array(y_sequences)
+        return np.array(X_sequences), np.array(y_sequences)
     
     def main():
         """Parse command line arguments and run model training"""
