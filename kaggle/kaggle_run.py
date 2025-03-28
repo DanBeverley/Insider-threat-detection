@@ -48,6 +48,8 @@ sys.path.append(str(INPUT_DIR))
 def main():
     """Run the ML lifecycle on Kaggle."""
     parser = argparse.ArgumentParser(description='Run Insider Threat Detection ML lifecycle on Kaggle')
+    parser.add_argument('--sample', type=float, default=1.0,
+                       help='Sample ratio (0.0-1.0) of data to use for testing')
     parser.add_argument('--skip-preprocessing', action='store_true',
                        help='Skip data preprocessing step')
     parser.add_argument('--skip-features', action='store_true',
@@ -237,6 +239,12 @@ def main():
             train_df.to_csv(DATA_DIR / "processed" / "train_features.csv", index=False)
             test_df.to_csv(DATA_DIR / "processed" / "test_features.csv", index=False)
             print(f"Created train/test split: {len(train_df)} train, {len(test_df)} test")
+            
+            # After loading any dataframe, e.g. log_df, email_df, etc.
+            if args.sample < 1.0:
+                sample_size = max(int(len(log_df) * args.sample), 100)  # Ensure at least 100 records
+                log_df = log_df.sample(n=sample_size, random_state=42)
+                print(f"Sampled {len(log_df)} records (sample ratio: {args.sample})")
             
         except Exception as e:
             logger.error(f"Error in feature engineering: {str(e)}")
