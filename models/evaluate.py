@@ -43,7 +43,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-plt.style.use('seaborn-v0_8-darkgrid')
+# Use a compatible style for newer versions of matplotlib
+try:
+    plt.style.use('seaborn-v0_8-darkgrid')
+except:
+    try:
+        plt.style.use('seaborn-darkgrid')
+    except:
+        # Fall back to default if neither style exists
+        plt.style.use('default')
+
 sns.set_palette("viridis")
 
 PROJECT_ROOT = Path(__file__).parent.parent
