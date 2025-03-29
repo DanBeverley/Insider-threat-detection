@@ -12,6 +12,7 @@ import argparse
 import logging
 from pathlib import Path
 import traceback
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(
@@ -555,17 +556,38 @@ def main():
                 output_dir=str(REPORTS_DIR)
             )
             
-            evaluation_results = evaluator.evaluate_models()
-            for model_name, metrics in evaluation_results.items():
-                print(f"Model: {model_name}")
-                for metric, value in metrics.items():
-                    print(f"  {metric}: {value:.4f}")
+            # Wrap each evaluation step in separate try-except blocks
+            try:
+                evaluation_results = evaluator.evaluate_models()
+                for model_name, metrics in evaluation_results.items():
+                    print(f"Model: {model_name}")
+                    for metric, value in metrics.items():
+                        print(f"  {metric}: {value:.4f}")
+            except Exception as e:
+                logger.error(f"Error in model evaluation metrics: {str(e)}")
+                logger.error(traceback.format_exc())
+                print(f"ERROR: Model evaluation metrics calculation failed: {str(e)}")
             
-            report_path = evaluator.generate_evaluation_report()
-            if report_path:
-                print(f"Evaluation report saved to: {report_path}")
-            else:
-                print("Evaluation report generation failed")
+            try:
+                report_path = evaluator.generate_evaluation_report()
+                if report_path:
+                    print(f"Evaluation report saved to: {report_path}")
+                else:
+                    print("Evaluation report generation failed")
+            except Exception as e:
+                logger.error(f"Error generating evaluation report: {str(e)}")
+                logger.error(traceback.format_exc())
+                print(f"ERROR: Evaluation report generation failed: {str(e)}")
+                
+                # Create a simple metrics report as fallback
+                try:
+                    print("Generating simple metrics report as fallback...")
+                    metrics_path = os.path.join(REPORTS_DIR, "model_metrics.csv")
+                    pd.DataFrame(evaluation_results).T.reset_index().rename(columns={"index": "model"}).to_csv(metrics_path, index=False)
+                    print(f"Simple metrics report saved to: {metrics_path}")
+                except Exception as inner_e:
+                    logger.error(f"Error creating fallback report: {str(inner_e)}")
+                    print(f"ERROR: Could not create fallback report: {str(inner_e)}")
         except Exception as e:
             logger.error(f"Error in model evaluation: {str(e)}")
             logger.error(traceback.format_exc())
@@ -608,6 +630,64 @@ def main():
     if args.deploy:
         print(f"- Deployment package saved to: {DEPLOYMENT_DIR}")
     print("====================================================")
+    
+    # Create some basic visualizations
+    try:
+        print("\n📊 Creating basic visualizations...")
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
+        # Create visualizations directory
+        os.makedirs("visualizations", exist_ok=True)
+        
+        # Try to find and visualize model metrics
+        metrics_path = os.path.join(REPORTS_DIR, "model_metrics.csv")
+        if os.path.exists(metrics_path):
+            try:
+                metrics_df = pd.read_csv(metrics_path)
+                print(f"Found metrics data: {len(metrics_df)} models")
+                
+                # Create a simple bar chart for key metrics
+                plt.figure(figsize=(10, 6))
+                metrics_to_plot = ["accuracy", "precision", "recall", "f1_score"]
+                metrics_to_plot = [m for m in metrics_to_plot if m in metrics_df.columns]
+                
+                if metrics_to_plot and "model" in metrics_df.columns:
+                    for metric in metrics_to_plot:
+                        plt.figure(figsize=(8, 5))
+                        sns.barplot(x="model", y=metric, data=metrics_df)
+                        plt.title(f"{metric.replace('_', ' ').title()} by Model")
+                        plt.xticks(rotation=45)
+                        plt.tight_layout()
+                        plt.savefig(f"visualizations/{metric}_comparison.png")
+                    print(f"Saved {len(metrics_to_plot)} metric visualizations")
+            except Exception as e:
+                logger.error(f"Error creating metrics visualizations: {str(e)}")
+                print(f"Could not create metrics visualizations: {str(e)}")
+                
+        # Try to visualize feature importance
+        try:
+            for model_name in ["random_forest", "xgboost", "logistic_regression"]:
+                fi_path = os.path.join(OUTPUT_DIR, f"{model_name}_feature_importance.csv")
+                if os.path.exists(fi_path):
+                    fi_df = pd.read_csv(fi_path)
+                    if "feature" in fi_df.columns and ("importance" in fi_df.columns or "coefficient" in fi_df.columns):
+                        importance_col = "importance" if "importance" in fi_df.columns else "coefficient"
+                        fi_df = fi_df.sort_values(importance_col, ascending=False).head(10)
+                        
+                        plt.figure(figsize=(10, 6))
+                        sns.barplot(x=importance_col, y="feature", data=fi_df)
+                        plt.title(f"Top 10 Features - {model_name.replace('_', ' ').title()}")
+                        plt.tight_layout()
+                        plt.savefig(f"visualizations/{model_name}_top_features.png")
+                        print(f"Saved feature importance visualization for {model_name}")
+        except Exception as e:
+            logger.error(f"Error creating feature importance visualizations: {str(e)}")
+            print(f"Could not create feature importance visualizations: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Error creating visualizations: {str(e)}")
+        print(f"Could not create visualizations: {str(e)}")
 
 if __name__ == "__main__":
     main()

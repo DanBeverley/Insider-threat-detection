@@ -1,6 +1,57 @@
-# Insider Threat Detection
+# Insider Threat Detection System
 
-An end-to-end machine learning system for detecting insider threats using the CERT Insider Threat Dataset.
+A machine learning pipeline for detecting insider threats in organizational data using behavioral analytics and machine learning.
+
+## Overview
+
+This system analyzes user activity data to identify potential insider threats by:
+1. Processing log, email, and file access data
+2. Extracting behavioral features
+3. Training multiple ML models
+4. Creating an ensemble model for improved detection accuracy
+
+## Components
+
+- **Data Preprocessing**: Cleans and normalizes raw log, email, and file access data
+- **Feature Engineering**: Extracts behavioral patterns and creates user profiles
+- **Model Training**: Trains multiple classifiers (Random Forest, XGBoost, Logistic Regression)
+- **Ensemble Learning**: Combines models for improved threat detection
+- **Evaluation**: Measures model performance with metrics (accuracy, precision, recall, F1)
+- **Visualization**: Generates charts to interpret model performance and feature importance
+
+## Workflow
+
+1. Raw data is processed into structured formats
+2. Features are extracted from processed data
+3. User profiles are created with anomaly indicators
+4. Models are trained with optimized parameters
+5. An ensemble model combines individual classifiers
+6. Results are evaluated and visualized
+
+## Expected Results
+
+- **Trained Models**: Saved in `models/trained_models/`
+- **Evaluation Reports**: Available in `reports/`
+- **Visualizations**: Feature importance charts in `visualizations/`
+- **Performance**: Primary evaluation metrics include precision, recall, and F1-score
+
+## Usage
+
+For Kaggle environments:
+```
+python kaggle_run.py --sample 1.0 --models "random_forest xgboost logistic_regression"
+```
+
+For local environments:
+```
+./run_ml_lifecycle.sh
+```
+
+Key parameters:
+- `--sample`: Data sampling ratio (0.0-1.0)
+- `--models`: Space-separated list of models to train
+- `--skip-preprocessing`: Skip the data preprocessing step
+- `--skip-features`: Skip the feature engineering step
 
 ## Project Structure
 
@@ -136,7 +187,3 @@ cd deployment/package_name/
 docker build -t insider-threat-detector .
 docker run -p 8000:8000 insider-threat-detector
 ```
-
-## License
-
-[MIT License](LICENSE)
